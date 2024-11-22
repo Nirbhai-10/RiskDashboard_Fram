@@ -18,7 +18,7 @@ import statsmodels.api as sm
 # Initialize the Dash app with a light Bootstrap theme
 external_stylesheets = [dbc.themes.FLATLY]
 app = dash.Dash(__name__, external_stylesheets=external_stylesheets)
-app.title = "Advanced Portfolio Risk Dashboard"
+app.title = "Portfolio Risk Dashboard"
 
 # Increase the number of stocks to 20 for better diversification
 tickers = [
