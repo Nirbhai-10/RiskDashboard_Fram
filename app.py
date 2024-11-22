@@ -20,6 +20,8 @@ external_stylesheets = [dbc.themes.FLATLY]
 app = dash.Dash(__name__, external_stylesheets=external_stylesheets)
 app.title = "Portfolio Risk Dashboard"
 
+server = app.server
+
 # Increase the number of stocks to 20 for better diversification
 tickers = [
     'RELIANCE.NS',    # Reliance Industries Ltd
