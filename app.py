@@ -11,23 +11,21 @@ import plotly.express as px
 import plotly.graph_objects as go
 import dash
 import dash_bootstrap_components as dbc
-from dash import dcc, html, no_update, ctx  # Import ctx directly from dash
+from dash import dcc, html, no_update
 from dash.dependencies import Input, Output, State, ALL, MATCH
 import statsmodels.api as sm
 from dash.exceptions import PreventUpdate
-import io
-import base64
-from scipy.stats import gaussian_kde
-from joblib import Parallel, delayed
 import warnings
 import json
+import uuid
+from scipy.stats import gaussian_kde
 
 warnings.filterwarnings("ignore")  # Suppress warnings for cleaner output
 
 # Initialize the Dash app with a light Bootstrap theme
 external_stylesheets = [dbc.themes.FLATLY]
 app = dash.Dash(__name__, external_stylesheets=external_stylesheets)
-app.title = "Advanced Portfolio Risk Dashboard"
+app.title = "Portfolio Risk Dashboard"
 
 server = app.server
 
@@ -370,7 +368,7 @@ def backtest_var(portfolio_returns, var_series):
 # Function to perform stress testing
 def stress_test(weights, stress_scenarios, returns):
     stress_results = {}
-    for scenario, details in stress_scenarios.items():
+    for scenario_id, details in stress_scenarios.items():
         shocks = details['shocks']
         probability = details['probability']
 
@@ -383,7 +381,7 @@ def stress_test(weights, stress_scenarios, returns):
         else:
             stressed_weights /= stressed_weights.sum()
         stressed_return = np.dot(stressed_weights, returns.mean()) * 252
-        stress_results[scenario] = {'return': stressed_return, 'probability': probability}
+        stress_results[details['name']] = {'return': stressed_return, 'probability': probability}
     return stress_results
 
 # Function to generate stressed weights based on scenario
@@ -472,13 +470,13 @@ weight_methods = {
     'MinVariance': calculate_min_variance_weights
 }
 
-# Initial stress scenarios
+# Initial stress scenarios with unique UUIDs
 initial_stress_scenarios = {
-    'Market Crash': {'shocks': {'Energy': -0.2, 'Financials': -0.15}, 'probability': 0.3},
-    'Sector Downturn': {'shocks': {'Technology': -0.25}, 'probability': 0.2},
-    'Interest Rate Spike': {'shocks': {'Financials': -0.1}, 'probability': 0.15},
-    'Commodity Price Drop': {'shocks': {'Energy': -0.3}, 'probability': 0.2},
-    'Regulatory Shock': {'shocks': {'Healthcare': -0.2}, 'probability': 0.15}
+    str(uuid.uuid4()): {'name': 'Market Crash', 'shocks': {'Energy': -0.2, 'Financials': -0.15}, 'probability': 0.3},
+    str(uuid.uuid4()): {'name': 'Sector Downturn', 'shocks': {'Technology': -0.25}, 'probability': 0.2},
+    str(uuid.uuid4()): {'name': 'Interest Rate Spike', 'shocks': {'Financials': -0.1}, 'probability': 0.15},
+    str(uuid.uuid4()): {'name': 'Commodity Price Drop', 'shocks': {'Energy': -0.3}, 'probability': 0.2},
+    str(uuid.uuid4()): {'name': 'Regulatory Shock', 'shocks': {'Healthcare': -0.2}, 'probability': 0.15}
 }
 
 # Layout of the Dash app
@@ -615,7 +613,7 @@ app.layout = dbc.Container([
             # Hidden divs to store data
             dcc.Store(id='bl-params', data={'tau': 0.05, 'P': [[1] + [0]*(len(tickers)-1)], 'Q': [0.02], 'omega': [[0.0001]]}),
             dcc.Store(id='stress-scenarios-store', data=initial_stress_scenarios)
-        ], width=4, style={'padding': '20px'}),
+        ], width=4, style={'padding': '20px', 'overflowY': 'auto', 'maxHeight': '90vh'}),
         dbc.Col([
             dbc.Tabs([
                 dbc.Tab(label='Risk Dashboard', tab_id='tab-risk'),
@@ -627,9 +625,25 @@ app.layout = dbc.Container([
                 dbc.Tab(label='Tail Risk & Stress Testing', tab_id='tab-tail-stress'),
                 dbc.Tab(label='Monte Carlo Simulation', tab_id='tab-monte-carlo'),
                 dbc.Tab(label='Stress Scenarios Heatmap', tab_id='tab-stress-heatmap')
-            ], id='tabs', active_tab='tab-risk'),
+            ], id='tabs', active_tab='tab-risk', style={'marginBottom': '20px'}),
             html.Div(id='tab-content')
-        ], width=8)
+        ], width=8, style={'padding': '20px'}),
+    ]),
+    # Watermark at the bottom right
+    html.Div([
+        html.A(
+            "Made by: Nirbhai, BITS Pilani",
+            href="https://www.linkedin.com/in/nirbhai10/",
+            target="_blank",
+            style={
+                'position': 'fixed',
+                'right': '10px',
+                'bottom': '10px',
+                'fontSize': '10px',
+                'color': 'gray',
+                'textDecoration': 'none'
+            }
+        )
     ]),
     # Modal for Black-Litterman Parameters
     dbc.Modal(
@@ -653,7 +667,7 @@ app.layout = dbc.Container([
         is_open=False,
         size='lg'
     )
-], fluid=True)
+], fluid=True)  # fluid=True is correctly applied to dbc.Container
 
 # Callback to display Black-Litterman parameter inputs when selected
 @app.callback(
@@ -713,24 +727,68 @@ def update_bl_views(num_views):
         Input('add-scenario-button', 'n_clicks'),
         Input({'type': 'remove-scenario', 'index': ALL}, 'n_clicks')
     ],
-    [State('stress-scenarios-container', 'children')]
+    [
+        State('stress-scenarios-container', 'children'),
+        State('stress-scenarios-store', 'data')
+    ]
 )
-def manage_stress_scenarios(add_n_clicks, remove_n_clicks, children):
+def manage_stress_scenarios(add_n_clicks, remove_n_clicks, children, stress_scenarios_data):
     ctx = dash.callback_context
 
     if not ctx.triggered:
-        raise PreventUpdate
+        # Initial load: Populate scenarios from the store
+        return [
+            dbc.Card([
+                dbc.CardHeader(f"Scenario {i + 1}: {details['name']}"),
+                dbc.CardBody([
+                    html.Label("Scenario Name:"),
+                    dbc.Input(id={'type': 'scenario-name', 'index': scenario_id}, type='text', value=details['name'], disabled=True),
+                    html.Br(),
+                    html.Label("Select Affected Sectors:"),
+                    dcc.Dropdown(
+                        id={'type': 'scenario-sectors', 'index': scenario_id},
+                        options=[{'label': sector, 'value': sector} for sector in set(ticker_sector.values())],
+                        multi=True,
+                        value=list(details['shocks'].keys()),
+                        disabled=True
+                    ),
+                    html.Br(),
+                    html.Label("Specify Shock Magnitudes (in %):"),
+                    dbc.Input(
+                        id={'type': 'scenario-shock', 'index': scenario_id},
+                        type='text',
+                        value=','.join([f"{sector}:{magnitude}" for sector, magnitude in details['shocks'].items()]),
+                        placeholder='Sector1:-0.2,Sector2:-0.1',
+                        disabled=True
+                    ),
+                    html.Br(),
+                    html.Label("Assign Probability (0-1):"),
+                    dbc.Input(
+                        id={'type': 'scenario-probability', 'index': scenario_id},
+                        type='number',
+                        value=details['probability'],
+                        min=0,
+                        max=1,
+                        step=0.01,
+                        disabled=True
+                    ),
+                    html.Br(),
+                    dbc.Button("Remove Scenario", id={'type': 'remove-scenario', 'index': scenario_id}, color="danger", size="sm")
+                ])
+            ], style={'margin-bottom': '20px'})
+            for i, (scenario_id, details) in enumerate(stress_scenarios_data.items())
+        ]
 
     triggered_id = ctx.triggered[0]['prop_id'].split('.')[0]
 
     if triggered_id == 'add-scenario-button':
         # Adding a new scenario
-        new_id = len(children)
+        new_id = str(uuid.uuid4())  # Unique identifier
         new_scenario = dbc.Card([
-            dbc.CardHeader(f"Scenario {new_id + 1}"),
+            dbc.CardHeader(f"New Scenario"),
             dbc.CardBody([
                 html.Label("Scenario Name:"),
-                dbc.Input(id={'type': 'scenario-name', 'index': new_id}, type='text', value=f"Scenario {new_id + 1}"),
+                dbc.Input(id={'type': 'scenario-name', 'index': new_id}, type='text', placeholder="Enter scenario name"),
                 html.Br(),
                 html.Label("Select Affected Sectors:"),
                 dcc.Dropdown(
@@ -740,10 +798,9 @@ def manage_stress_scenarios(add_n_clicks, remove_n_clicks, children):
                 ),
                 html.Br(),
                 html.Label("Specify Shock Magnitudes (in %):"),
-                dcc.Input(
+                dbc.Input(
                     id={'type': 'scenario-shock', 'index': new_id},
                     type='text',
-                    value='Energy:-0.2,Technology:-0.1',  # Example input
                     placeholder='Sector1:-0.2,Sector2:-0.1'
                 ),
                 html.Br(),
@@ -751,7 +808,7 @@ def manage_stress_scenarios(add_n_clicks, remove_n_clicks, children):
                 dbc.Input(
                     id={'type': 'scenario-probability', 'index': new_id},
                     type='number',
-                    value=0.2,
+                    placeholder='0.2',
                     min=0,
                     max=1,
                     step=0.01
@@ -762,22 +819,21 @@ def manage_stress_scenarios(add_n_clicks, remove_n_clicks, children):
         ], style={'margin-bottom': '20px'})
         children.append(new_scenario)
 
-    elif 'remove-scenario' in triggered_id:
+    elif any(triggered_id.startswith('{"type": "remove-scenario"')):
         # Removing a scenario
         try:
-            # Parse the JSON-like dict from the triggered_id
+            # Extract the index of the scenario to remove
             triggered_dict = json.loads(triggered_id.replace("'", '"'))
-            index_to_remove = triggered_dict['index']
-            # Remove the scenario with the matching index
-            new_children = []
-            for child in children:
-                header = child.children[0].children  # CardHeader text
-                card_id = int(header.split()[-1]) - 1
-                if card_id != index_to_remove:
-                    new_children.append(child)
-            children = new_children
-        except:
-            pass  # In case of any parsing errors
+            scenario_id_to_remove = triggered_dict['index']
+            # Remove the scenario with the matching UUID
+            children = [
+                child for child in children
+                if child['props']['children'][0]['props']['children'][0]['props']['children'] != f"Scenario {scenario_id_to_remove}: {stress_scenarios_data[scenario_id_to_remove]['name']}"
+            ]
+            # Remove the scenario from the store data
+            stress_scenarios_data.pop(scenario_id_to_remove, None)
+        except Exception as e:
+            print(f"Error removing scenario: {e}")
 
     return children
 
@@ -790,29 +846,41 @@ def manage_stress_scenarios(add_n_clicks, remove_n_clicks, children):
         State({'type': 'scenario-sectors', 'index': ALL}, 'value'),
         State({'type': 'scenario-shock', 'index': ALL}, 'value'),
         State({'type': 'scenario-probability', 'index': ALL}, 'value'),
+        State({'type': 'scenario-name', 'index': ALL}, 'id'),
         State('stress-scenarios-store', 'data')
     ],
     prevent_initial_call=True
 )
-def save_stress_scenarios(n_clicks, names, sectors, shocks, probabilities, existing_data):
+def save_stress_scenarios(n_clicks, names, sectors, shocks, probabilities, ids, existing_data):
     if n_clicks is None:
         raise PreventUpdate
+
     new_scenarios = {}
     total_prob = 0
     for i in range(len(names)):
         name = names[i]
         affected_sectors = sectors[i] if sectors[i] else []
         shock_input = shocks[i]
+        probability = probabilities[i] if i < len(probabilities) else 0.0
+        scenario_id = ids[i]['index']
+        
         try:
             shock_dict = {}
             if shock_input:
                 for pair in shock_input.split(','):
-                    sector, magnitude = pair.split(':')
-                    shock_dict[sector.strip()] = float(magnitude.strip())
-            probability = float(probabilities[i])
-            total_prob += probability
-            new_scenarios[name] = {'shocks': shock_dict, 'probability': probability}
-        except:
+                    if ':' in pair:
+                        sector, magnitude = pair.split(':')
+                        shock_dict[sector.strip()] = float(magnitude.strip())
+            
+            if name:  # Ensure scenario has a name
+                new_scenarios[scenario_id] = {
+                    'name': name,
+                    'shocks': shock_dict,
+                    'probability': probability
+                }
+                total_prob += probability
+        except Exception as e:
+            print(f"Error processing scenario {i+1}: {e}")
             continue  # Skip invalid entries
 
     # Normalize probabilities if they don't sum to 1
@@ -844,8 +912,9 @@ def save_bl_params(n_clicks, tau, num_views, assets, Q, omega):
                 p[tickers.index(asset)] = 1
             P.append(p)
         Q = Q[:num_views]
-        omega = [[o] for o in omega[:num_views]]
-        return {'tau': tau, 'P': P, 'Q': Q, 'omega': omega}
+        # Correctly construct Omega as a diagonal matrix
+        omega_diag = np.diag([o for o in omega[:num_views]]).tolist()
+        return {'tau': tau, 'P': P, 'Q': Q, 'omega': omega_diag}
     return no_update
 
 # Callback to handle opening and closing the modal
@@ -859,7 +928,7 @@ def save_bl_params(n_clicks, tau, num_views, assets, Q, omega):
     [State("bl-modal", "is_open")]
 )
 def manage_bl_modal(weight_method, close_n_clicks, save_n_clicks, is_open):
-    triggered_id = ctx.triggered_id
+    triggered_id = dash.callback_context.triggered[0]['prop_id'].split('.')[0]
     if triggered_id == "weight-method":
         if weight_method == "BlackLitterman" and not is_open:
             return True
@@ -869,7 +938,7 @@ def manage_bl_modal(weight_method, close_n_clicks, save_n_clicks, is_open):
         return False
     return is_open
 
-# Main callback to render content based on selected tab and inputs
+# Callback for Risk Dashboard Tab
 @app.callback(
     Output('tab-content', 'children'),
     [
@@ -1011,7 +1080,8 @@ def render_content(n_clicks, active_tab, time_horizon, weight_method, var_method
             paper_bgcolor='white',
             font=dict(color='black', size=14),
             legend=dict(font_size=12),
-            title_font_size=16
+            title_font_size=16,
+            margin=dict(l=50, r=50, t=50, b=50)
         )
 
         children = []
@@ -1044,7 +1114,8 @@ def render_content(n_clicks, active_tab, time_horizon, weight_method, var_method
             paper_bgcolor='white',
             font=dict(color='black', size=14),
             xaxis_tickangle=-65,
-            title_font_size=16
+            title_font_size=16,
+            margin=dict(l=50, r=50, t=50, b=50)
         )
         weights_fig.update_xaxes(tickfont_size=12)
         weights_fig.update_yaxes(title_font_size=14)
@@ -1101,14 +1172,10 @@ def render_content(n_clicks, active_tab, time_horizon, weight_method, var_method
             line=dict(color='green', width=2, dash='dash')
         ))
 
-        # Add VaR and ES lines with adjusted annotations
-        hist_fig.add_vline(x=var_percent * portfolio_value, line_width=2, line_dash="dash", line_color="red",
-                           annotation_text=f"VaR: ₹{var_monetary:,.2f}", annotation_position="top left",
-                           annotation=dict(font_size=12, bgcolor="rgba(255,255,255,0.7)", bordercolor="red", borderwidth=1))
-
-        hist_fig.add_vline(x=es_percent * portfolio_value, line_width=2, line_dash="dash", line_color="orange",
-                           annotation_text=f"ES: ₹{es_monetary:,.2f}", annotation_position="top left",
-                           annotation=dict(font_size=12, bgcolor="rgba(255,255,255,0.7)", bordercolor="orange", borderwidth=1))
+        # Adjust x-axis to better fit the distribution
+        x_min = max(hist_data.min(), np.percentile(hist_data, 1))
+        x_max = min(hist_data.max(), np.percentile(hist_data, 99))
+        hist_fig.update_xaxes(range=[x_min, x_max])
 
         hist_fig.update_layout(
             title='Portfolio Return Distribution',
@@ -1119,12 +1186,13 @@ def render_content(n_clicks, active_tab, time_horizon, weight_method, var_method
             font=dict(color='black', size=14),
             bargap=0.2,
             legend=dict(font_size=12),
-            title_font_size=16
+            title_font_size=16,
+            margin=dict(l=50, r=50, t=50, b=50)
         )
         hist_fig.update_xaxes(title_font_size=14)
         hist_fig.update_yaxes(title_font_size=14)
 
-        # Display VaR and ES values
+        # Display VaR and ES values separately below the graph
         var_text = f"Value at Risk (VaR) at {int(confidence_level_decimal * 100)}% confidence level: ₹{var_monetary:,.2f}"
         es_text = f"Expected Shortfall (ES) at {int(confidence_level_decimal * 100)}% confidence level: ₹{es_monetary:,.2f}"
 
@@ -1174,7 +1242,8 @@ def render_content(n_clicks, active_tab, time_horizon, weight_method, var_method
             plot_bgcolor='white',
             paper_bgcolor='white',
             font=dict(color='black', size=14),
-            title_font_size=16
+            title_font_size=16,
+            margin=dict(l=50, r=50, t=50, b=50)
         )
 
         children = []
@@ -1242,36 +1311,33 @@ def render_content(n_clicks, active_tab, time_horizon, weight_method, var_method
             paper_bgcolor='white',
             font=dict(color='black', size=14),
             legend=dict(font_size=12),
-            title_font_size=16
+            title_font_size=16,
+            margin=dict(l=50, r=50, t=50, b=80)
         )
 
         # Perform backtesting
         backtest_window = window
-        backtest_var_series, backtest_es_series = calculate_rolling_var_es(
-            returns, weights, window=backtest_window, confidence_level=confidence_level_decimal, method=var_method
-        )
-        violations = returns.dot(weights) < -backtest_var_series
-        violation_count = violations.sum()
-        violation_rate = violation_count / violations.count()
+        try:
+            backtest_var_series, backtest_es_series = calculate_rolling_var_es(
+                returns, weights, window=backtest_window, confidence_level=confidence_level_decimal, method=var_method
+            )
+            violations = returns.dot(weights) < -backtest_var_series
+            violation_count = violations.sum()
+            violation_rate = violation_count / violations.count()
+            backtest_text = f"Backtesting Results: {violation_count} violations out of {violations.count()} observations ({violation_rate:.2%} violation rate)."
+        except Exception as e:
+            backtest_text = f"Backtesting could not be performed: {str(e)}"
 
-        backtest_text = f"Backtesting Results: {violation_count} violations out of {violations.count()} observations ({violation_rate:.2%} violation rate)."
-
-        # Add backtest results as annotations with proper spacing
-        trend_fig.add_annotation(
-            xref="paper", yref="paper",
-            x=0.5, y=-0.2,
-            showarrow=False,
-            text=backtest_text,
-            font=dict(size=14, color="black"),
-            align="center"
-        )
-
+        # Add backtest results below the graph to prevent overlap
         children = []
         if optimization_alert:
             children.append(optimization_alert)
 
         children.extend([
-            dcc.Graph(figure=trend_fig)
+            dcc.Graph(figure=trend_fig),
+            html.Div([
+                dbc.Alert(backtest_text, color="info", style={'marginTop': '20px'})
+            ], style={'textAlign': 'center'})
         ])
 
         return html.Div(children)
@@ -1310,7 +1376,7 @@ def render_content(n_clicks, active_tab, time_horizon, weight_method, var_method
         stress_df = pd.DataFrame.from_dict(stress_results, orient='index')
         stress_df.reset_index(inplace=True)
         stress_df.rename(columns={'index': 'Scenario'}, inplace=True)
-        stress_df['Probability'] = stress_df['probability'] * 100
+        stress_df['Probability (%)'] = stress_df['probability'] * 100
         stress_df['Expected Return (₹)'] = stress_df['return']
 
         stress_fig = px.bar(
@@ -1321,14 +1387,15 @@ def render_content(n_clicks, active_tab, time_horizon, weight_method, var_method
             color='Expected Return (₹)',
             color_continuous_scale='Reds',
             labels={'Expected Return (₹)': 'Expected Return (₹)'},
-            hover_data=['Probability', 'Expected Return (₹)']
+            hover_data=['Probability (%)', 'Expected Return (₹)']
         )
         stress_fig.update_layout(
             plot_bgcolor='white',
             paper_bgcolor='white',
             font=dict(color='black', size=14),
             title_font_size=16,
-            xaxis_tickangle=-45
+            xaxis_tickangle=-45,
+            margin=dict(l=50, r=50, t=50, b=100)
         )
         stress_fig.update_yaxes(title_font_size=14)
 
@@ -1363,7 +1430,11 @@ def render_content(n_clicks, active_tab, time_horizon, weight_method, var_method
             ])
 
         # Check for simulations below the threshold
-        exceed_count = np.sum(simulations < mc_return_threshold)
+        if mc_simulation_type == 'returns':
+            exceed_count = np.sum(simulations < (mc_return_threshold / portfolio_value))
+        else:
+            # For path simulations, check the final portfolio value
+            exceed_count = np.sum(simulations[:, -1] < mc_return_threshold)
         exceed_percentage = (exceed_count / mc_num_simulations) * 100
 
         # Generate alert if threshold is breached
@@ -1414,14 +1485,10 @@ def render_content(n_clicks, active_tab, time_horizon, weight_method, var_method
                 line=dict(color='green', width=2, dash='dash')
             ))
 
-            # Add VaR and ES lines with adjusted annotations
-            hist_fig.add_vline(x=var_percent * portfolio_value, line_width=2, line_dash="dash", line_color="red",
-                               annotation_text=f"VaR: ₹{var_monetary:,.2f}", annotation_position="top left",
-                               annotation=dict(font_size=12, bgcolor="rgba(255,255,255,0.7)", bordercolor="red", borderwidth=1))
-
-            hist_fig.add_vline(x=es_percent * portfolio_value, line_width=2, line_dash="dash", line_color="orange",
-                               annotation_text=f"ES: ₹{es_monetary:,.2f}", annotation_position="top left",
-                               annotation=dict(font_size=12, bgcolor="rgba(255,255,255,0.7)", bordercolor="orange", borderwidth=1))
+            # Adjust x-axis to better fit the distribution
+            x_min = max(simulations.min(), np.percentile(simulations, 1))
+            x_max = min(simulations.max(), np.percentile(simulations, 99))
+            hist_fig.update_xaxes(range=[x_min, x_max])
 
             hist_fig.update_layout(
                 title='Monte Carlo Simulation of Portfolio Returns',
@@ -1432,7 +1499,8 @@ def render_content(n_clicks, active_tab, time_horizon, weight_method, var_method
                 font=dict(color='black', size=14),
                 bargap=0.2,
                 legend=dict(font_size=12),
-                title_font_size=16
+                title_font_size=16,
+                margin=dict(l=50, r=50, t=50, b=50)
             )
             hist_fig.update_xaxes(title_font_size=14)
             hist_fig.update_yaxes(title_font_size=14)
@@ -1528,39 +1596,11 @@ def render_content(n_clicks, active_tab, time_horizon, weight_method, var_method
                 paper_bgcolor='white',
                 font=dict(color='black', size=14),
                 showlegend=True,
-                title_font_size=16
+                title_font_size=16,
+                margin=dict(l=50, r=50, t=50, b=80)
             )
             path_fig.update_xaxes(title_font_size=14)
             path_fig.update_yaxes(title_font_size=14)
-
-            # Add annotations with proper spacing
-            annotations = [
-                dict(
-                    x=var_percent * portfolio_value,
-                    y=max(simulations.flatten()),
-                    xref='x',
-                    yref='y',
-                    text=f"VaR: ₹{var_monetary:,.2f}",
-                    showarrow=True,
-                    arrowhead=1,
-                    ax=0,
-                    ay=-40,
-                    font=dict(color="red", size=12)
-                ),
-                dict(
-                    x=es_percent * portfolio_value,
-                    y=max(simulations.flatten()) * 0.95,
-                    xref='x',
-                    yref='y',
-                    text=f"ES: ₹{es_monetary:,.2f}",
-                    showarrow=True,
-                    arrowhead=1,
-                    ax=0,
-                    ay=-40,
-                    font=dict(color="orange", size=12)
-                )
-            ]
-            path_fig.update_layout(annotations=annotations)
 
             # Summary statistics
             mc_mean = np.mean(simulations)
@@ -1608,29 +1648,23 @@ def render_content(n_clicks, active_tab, time_horizon, weight_method, var_method
 
     elif active_tab == 'tab-stress-heatmap':
         # Create Heatmap for Stress Scenarios
-        # Calculate correlation between sectors and their impact
-        stress_df = pd.DataFrame.from_dict(stress_scenarios, orient='index')
-        stress_df = stress_df[['shocks', 'probability']]
-
         # Extract sectors and shocks
-        sectors = sorted(set(sector for shocks in stress_df['shocks'] for sector in shocks.keys()))
+        sectors = sorted(set(sector for scenarios in stress_scenarios.values() for sector in scenarios['shocks'].keys()))
 
         # Create a matrix for heatmap
         heatmap_data = []
+        scenario_names = []
         probabilities = []
-        scenario_names = stress_df.index.tolist()
-        for idx, row in stress_df.iterrows():
-            shock = row['shocks']
-            prob = row['probability']
-            row_data = [shock.get(sector, 0) for sector in sectors]
+        for scenario_id, details in stress_scenarios.items():
+            scenario_names.append(details['name'])
+            probabilities.append(details['probability'])
+            row_data = [details['shocks'].get(sector, 0) for sector in sectors]
             heatmap_data.append(row_data)
-            probabilities.append(prob)
 
         heatmap_df = pd.DataFrame(heatmap_data, columns=sectors, index=scenario_names)
-        heatmap_df['Probability'] = probabilities
 
         heatmap_fig = px.imshow(
-            heatmap_df[sectors],
+            heatmap_df,
             labels=dict(x="Sector", y="Scenario", color="Shock Magnitude"),
             x=sectors,
             y=scenario_names,
@@ -1645,7 +1679,8 @@ def render_content(n_clicks, active_tab, time_horizon, weight_method, var_method
             plot_bgcolor='white',
             paper_bgcolor='white',
             font=dict(color='black', size=14),
-            title_font_size=16
+            title_font_size=16,
+            margin=dict(l=100, r=100, t=50, b=100)
         )
         heatmap_fig.update_xaxes(side="top")
         heatmap_fig.update_yaxes(autorange="reversed")
@@ -1663,5 +1698,10 @@ def render_content(n_clicks, active_tab, time_horizon, weight_method, var_method
     else:
         return html.Div("No content available for this tab.")
 
+
+
 if __name__ == '__main__':
-    app.run_server(debug=True)
+    import os
+    port = int(os.environ.get("PORT", 8050))  # Use PORT if defined, else default to 8050
+    app.run_server(host='0.0.0.0', port=port, debug=True)
+
