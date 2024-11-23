@@ -94,7 +94,7 @@ data.bfill(inplace=True)
 # Calculate daily returns
 returns = data.pct_change().dropna()
 
-# Define function to calculate PCA weights
+# Define function to calculate PCA weight
 def calculate_pca_weights(returns):
     pca = PCA()
     pca.fit(returns)
